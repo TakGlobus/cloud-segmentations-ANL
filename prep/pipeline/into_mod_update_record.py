@@ -23,6 +23,7 @@ import tensorflow as tf
 print(tf.__version__)
 
 import os
+import cv2
 import sys
 import glob
 import copy
@@ -54,7 +55,8 @@ def gen_sds(filelist=[], ):
   
   for ifile in filelist:
     im = Image.open(ifile)
-    swath = np.asarray(im)
+    swath_read_only = np.asarray(im)
+    swath = copy.deepcopy(swath_read_only).astype(np.float64)
     yield ifile, swath
 
 
@@ -71,8 +73,19 @@ def translate_clouds_array(patch, thres, ch):
     flag = True if nthres == 0 else False
     return flag
 
+def get_masks(rpatch_size, channels):
 
-def gen_patches(swaths, stride=128, patch_size=128, rgb_max=255.0, thres=0.0):
+    mask = np.zeros((rpatch_size, rpatch_size), dtype=np.float64)
+    cv2.circle(mask, center=(rpatch_size // 2, rpatch_size // 2),
+                radius=rpatch_size//2, color=1, thickness=-1)
+    mask = np.expand_dims(mask, axis=-1)
+    #  multiple dimension
+    mask_list = [ mask for i in range(channels)]
+    masks = np.concatenate(mask_list, axis=-1)
+    return masks
+
+
+def gen_patches(swaths, mask, stride=128, patch_size=128, rgb_max=255.0, thres=0.0):
     
     """Normalizes swaths and yields patches of size `shape` every `strides` pixels
     """
@@ -96,6 +109,8 @@ def gen_patches(swaths, stride=128, patch_size=128, rgb_max=255.0, thres=0.0):
           clouds_flag = translate_clouds_array(patch, thres=thres,ch=channels)
           if clouds_flag:
             patch /= rgb_max
+            patch = patch * mask
+
             yield fname, (i, j), patch
 
 def write_feature(writer, filename, coord, patch):
@@ -143,16 +158,22 @@ def get_args(verbose=False):
         default=128,
     )
     # NOT USED NOW
-    p.add_argument(
-        "--resize",
-        type=float,
-        help="Resize fraction e.g. 0.25 to quarter scale. Only used for pptif",
-    )
+    #p.add_argument(
+    #    "--resize",
+    #    type=float,
+    #    help="Resize fraction e.g. 0.25 to quarter scale. Only used for pptif",
+    #)
     p.add_argument(
         "--stride",
         type=int,
         help="patch stride. patch size/2 to compesate boundry information",
         default=64,
+    )
+    p.add_argument(
+        "--channel",
+        type=int,
+        help="channel size of input patch",
+        default=3,
     )
     #p.add_argument(
     #    "--stats_datadir", 
@@ -215,6 +236,10 @@ if __name__ == "__main__":
     # process start
     s1 = time.time()
 
+    # circle mask
+    mask = get_masks(FLAGS.shape,FLAGS.channel).reshape(FLAGS.shape, FLAGS.shape,FLAGS.channel)
+
+    # operation start
     try:
       swaths  = gen_sds(fnames) 
     except Exception as e:
@@ -223,7 +248,7 @@ if __name__ == "__main__":
 
     if swaths is not None:
       try:
-        patches = gen_patches(fnames, FLAGS.stride, FLAGS.shape)
+        patches = gen_patches(swaths, mask, FLAGS.stride, FLAGS.shape)
       except Exception as e:
         patches = None
 
